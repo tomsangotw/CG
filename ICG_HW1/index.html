@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+<title>ICG WebGL &mdash; HW1</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="./js/glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="./js/webgl-utils.js"></script>
+
+<!-- 
+    TODO HERE: 
+    modify fragment shader or write another one
+    to implement flat, gouraud and phong shading
+
+    //https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Adding_2D_content_to_a_WebGL_context
+    // gl_FragColor: 是GL預設的變數用來定義每個 fragment 的顏色，透過設定該變數的值來定義每個 pixel 的顏色
+ -->
+<script id="fragmentShader" type="fragment">
+    #extension GL_EXT_shader_texture_lod : enable
+    #extension GL_OES_standard_derivatives : enable
+    precision mediump float; //medium precision, 決定 GPU 浮點數運算
+
+    varying vec3 vFrontColor;
+
+    varying vec3 vVertexPosition;
+
+    uniform float ka; //ambient 
+    uniform float kd; //diffuse 
+    uniform float ks; //specular 
+    uniform float shininess;
+    uniform vec3 lightPosition1;
+    uniform vec3 lightPosition2;
+    uniform vec3 lightPosition3;
+    uniform vec3 lightColor;
+    
+    void main(void) {
+        //假設 lighting 位置
+        //vec3 light = vec3(30, 20, -25); //右上角 (世界坐標系)
+        vec3 light = lightPosition1;
+        //vec3 lightColor = vec3(1.0);
+
+        //實作 flat shading (ambient + diffuse + specular)
+        vec3 flatShading = vec3(0, 0, 0); //= vec3(0.0);
+        
+        //需要 V, N, L, H
+        vec3 xTangent = dFdx( vVertexPosition );
+        vec3 yTangent = dFdy( vVertexPosition );
+        vec3 faceNormal = normalize( cross( xTangent, yTangent ) );
+        vec3 V = -normalize(vVertexPosition); // -(camera 看向物體) => 物體看向 camera
+        vec3 N = faceNormal; //新的 normal 的方向 => 但正規化
+        vec3 L = normalize(light - vVertexPosition);
+        vec3 H = normalize(L + V); //用在 specular light 裡面的 cos(alpha)^n，所謂的 halftway vector 的加速
+
+        //flatShading = ambient + diffuse + specular
+        // float ka = 0.1;
+        // float kd = 0.6;
+        // float ks = 0.3;
+        // 上面定義了
+
+        vec3 ambient = lightColor * ka * vFrontColor; //不會重複計算，不管有幾個 light 都會是定值 (第一項其實是整個的 light intensity)
+        flatShading += ambient;
+
+        float cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        vec3 diffuse = lightColor * kd * vFrontColor * cosTheta;
+        flatShading += diffuse;
+
+        float cosAlpha = max(dot(H, N), 0.0);
+        vec3 specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        flatShading += specular;
+
+        // Second light, Light 重新定位
+        L = normalize(lightPosition2 - vVertexPosition);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * vFrontColor * cosTheta;
+        flatShading += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        flatShading += specular;
+
+        // Third light, Light 重新定位
+        L = normalize(lightPosition3 - vVertexPosition);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * vFrontColor * cosTheta;
+        flatShading += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        flatShading += specular;
+        
+
+        gl_FragColor = vec4(flatShading, 1.0);
+    }
+</script>
+
+<script id="fragmentShaderGouraud" type="fragment">
+    precision mediump float; //medium precision, 決定 GPU 浮點數運算
+
+    varying vec4 fragcolor;
+
+    void main(void) {
+        //之前已經定義過 register 的數值，這邊賦予數值
+        //使每個 fragment 得到利用相對位置內插法所產生顏色，而不是得到一個固定的值。
+        gl_FragColor = fragcolor;
+
+    }
+</script>
+
+<script id="fragmentShaderPhong" type="fragment">
+    //顏色在這邊 (fragment) 處理就是 phong shading
+    precision mediump float; //medium precision, 決定 GPU 浮點數運算
+
+    varying vec3 vFrontColor;
+
+    varying vec3 vNormalInterpolate;
+    varying vec3 vVertexPosition;
+
+    uniform float ka; //ambient 
+    uniform float kd; //diffuse 
+    uniform float ks; //specular 
+    uniform float shininess;
+    uniform vec3 lightPosition1;
+    uniform vec3 lightPosition2;
+    uniform vec3 lightPosition3;
+    uniform vec3 lightColor;
+    
+    void main(void) {
+        //假設 lighting 位置
+        //vec3 light = vec3(30, 20, -25); //右上角 (世界坐標系)
+        vec3 light = lightPosition1;
+        //vec3 lightColor = vec3(1.0);
+
+        //實作 phong shading (ambient + diffuse + specular)
+        vec3 phong = vec3(0, 0, 0); //= vec3(0.0);
+        
+        //需要 V, N, L, H
+        vec3 V = -normalize(vVertexPosition); // -(camera 看向物體) => 物體看向 camera
+        vec3 N = normalize(vNormalInterpolate); //就是 normal 的方向 => 但正規化
+        vec3 L = normalize(light - vVertexPosition);
+        vec3 H = normalize(L + V); //用在 specular light 裡面的 cos(alpha)^n，所謂的 halftway vector 的加速
+
+        //phong = ambient + diffuse + specular
+        // float ka = 0.1;
+        // float kd = 0.6;
+        // float ks = 0.3;
+        // 上面定義了
+
+        vec3 ambient = lightColor * ka * vFrontColor; //不會重複計算，不管有幾個 light 都會是定值 (第一項其實是整個的 light intensity)
+        phong += ambient;
+
+        float cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        vec3 diffuse = lightColor * kd * vFrontColor * cosTheta;
+        phong += diffuse;
+
+        float cosAlpha = max(dot(H, N), 0.0);
+        vec3 specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        phong += specular;
+        
+        // Second light, Light 重新定位
+        L = normalize(lightPosition2 - vVertexPosition);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * vFrontColor * cosTheta;
+        phong += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        phong += specular;
+
+        // Third light, Light 重新定位
+        L = normalize(lightPosition3 - vVertexPosition);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * vFrontColor * cosTheta;
+        phong += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        phong += specular;
+
+        gl_FragColor = vec4(phong, 1.0);
+    }
+</script>
+
+
+<script id="fragmentShaderToon" type="fragment">
+    //Toon 顏色也要在這邊 (fragment) 處理
+    precision mediump float; //medium precision, 決定 GPU 浮點數運算
+
+    varying vec3 vFrontColor;
+    varying vec3 vVertexNormal; //normal 的方向
+    varying vec3 vVertexPosition;
+
+    uniform float ka; //ambient 
+    uniform float kd; //diffuse 
+    uniform float ks; //specular 
+    uniform float shininess;
+    uniform vec3 lightPosition1;
+    uniform vec3 lightPosition2;
+    uniform vec3 lightPosition3;
+    uniform vec3 lightColor;
+    
+    void main(void) {
+        float intensity;
+        vec3 toon = vec3(0.0);
+        vec3 color;
+
+        vec3 V = -normalize(vVertexPosition); // -(camera 看向物體) => 物體看向 camera
+        vec3 N = normalize(vVertexNormal); //就是 normal 的方向 => 但正規化
+        vec3 L = normalize(lightPosition1 - vVertexPosition);
+        vec3 H = normalize(L + V); //用在 specular light 裡面的 cos(alpha)^n，所謂的 halftway vector 的加速
+
+
+        vec3 ambient = lightColor * ka * vFrontColor; //不會重複計算，不管有幾個 light 都會是定值 (第一項其實是整個的 light intensity)
+        toon += ambient;
+
+        //就是 diffuse 的 cosTheta
+        intensity = max(0.0, dot(L, N));
+        if(intensity > 0.95) {
+            color = lightColor;
+        }else if(intensity > 0.75) {
+            color = lightColor * 0.8;
+        }else if(intensity > 0.5) {
+            color = lightColor * 0.6;
+        }else if(intensity > 0.25){
+            color = lightColor * 0.4;
+        }else{
+            color = lightColor * 0.2;
+        }
+        /*
+        if(intensity > 0.9) {
+            color = lightColor;
+        }else if(intensity > 0.8) {
+            color = lightColor * 0.9;
+        }else if(intensity > 0.7) {
+            color = lightColor * 0.8;
+        }else if(intensity > 0.6){
+            color = lightColor * 0.7;
+        }else if(intensity > 0.5){
+            color = lightColor * 0.6;
+        }else if(intensity > 0.4){
+            color = lightColor * 0.5;
+        }else if(intensity > 0.3){
+            color = lightColor * 0.4;
+        }else if(intensity > 0.2){
+            color = lightColor * 0.3;
+        }else if(intensity > 0.1){
+            color = lightColor * 0.2;
+        }else{
+            color = lightColor * 0.1;
+        }*/
+        toon += color * vFrontColor * kd;
+
+        //specular 量化
+        intensity = max(dot(H, N), 0.0); //本來的 cosineAlpha
+        if(intensity > 0.95) {
+            intensity = 1.0;
+        }else if(intensity > 0.75) {
+            intensity = 0.8;
+        }else if(intensity > 0.5) {
+            intensity = 0.6;
+        }else if(intensity > 0.25){
+            intensity = 0.4;
+        }else{
+            intensity = 0.2;
+        }
+        vec3 specular = lightColor * ks * pow(intensity, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        toon += specular;
+
+
+        //second light
+        L = normalize(lightPosition2 - vVertexPosition);
+        intensity = max(0.0, dot(L, N));
+        if(intensity > 0.95) {
+            color = lightColor;
+        }else if(intensity > 0.75) {
+            color = lightColor * 0.8;
+        }else if(intensity > 0.5) {
+            color = lightColor * 0.6;
+        }else if(intensity > 0.25){
+            color = lightColor * 0.4;
+        }else{
+            color = lightColor * 0.2;
+        }
+        toon += color * vFrontColor * kd;
+        //specular 量化
+        H = normalize(L + V);
+        intensity = max(dot(H, N), 0.0); //本來的 cosineAlpha
+        if(intensity > 0.95) {
+            intensity = 1.0;
+        }else if(intensity > 0.75) {
+            intensity = 0.8;
+        }else if(intensity > 0.5) {
+            intensity = 0.6;
+        }else if(intensity > 0.25){
+            intensity = 0.4;
+        }else{
+            intensity = 0.2;
+        }
+        specular = lightColor * ks * pow(intensity, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        toon += specular;
+
+        //third light
+        L = normalize(lightPosition3 - vVertexPosition);
+        intensity = max(0.0, dot(L, N));
+        if(intensity > 0.95) {
+            color = lightColor;
+        }else if(intensity > 0.75) {
+            color = lightColor * 0.8;
+        }else if(intensity > 0.5) {
+            color = lightColor * 0.6;
+        }else if(intensity > 0.25){
+            color = lightColor * 0.4;
+        }else{
+            color = lightColor * 0.2;
+        }
+        toon += color * vFrontColor * kd;
+        H = normalize(L + V);
+        intensity = max(dot(H, N), 0.0); //本來的 cosineAlpha
+        if(intensity > 0.95) {
+            intensity = 1.0;
+        }else if(intensity > 0.75) {
+            intensity = 0.8;
+        }else if(intensity > 0.5) {
+            intensity = 0.6;
+        }else if(intensity > 0.25){
+            intensity = 0.4;
+        }else{
+            intensity = 0.2;
+        }
+        specular = lightColor * ks * pow(intensity, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        toon += specular;
+
+
+        gl_FragColor = vec4(toon, 1.0);
+    }
+</script>
+
+<!-- 
+    TODO HERE:
+    modify vertex shader or write another one
+    to implement flat, gouraud and phong shading
+
+    NOTE:
+    if you want to write bonus part (texture mapping),
+    only Teapot.json has extra attribute "vertexTextureCoords"
+    which is used for texture mappping.
+    
+    著色器
+    https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Adding_2D_content_to_a_WebGL_context
+    https://stackoverflow.com/questions/17537879/in-webgl-what-are-the-differences-between-an-attribute-a-uniform-and-a-varying
+    // Vertex Shader: 頂點著色器
+    // 拿 gl_Position 1~3 的數值，會分別畫出點、線、面
+    // 之後 call fragment shader 問 pixel 顏色
+
+    // 1.attribute: 全域變數，隨著 vertex 變換 (ex: texture(or color), coordinates)
+
+    // 2.uniform: 全域 constant per-primitive(原始事物) (or per-object)
+    //  constant during an entire draw call
+
+    // 3.varing: used for interpolated data between a vertex shader and a fragment shader
+    //  隨著 pixel vary (變換)
+
+    //*WebGL 使用 OpenGL 的語法 GLSL
+
+    //https://gamedev.stackexchange.com/questions/61257/glsl-declaring-global-variables-outside-of-the-main-function-scope
+    // 為何宣告可以傳(attribute, uniform, varying) 都是 GPU register
+    // all variables declared anywhere live in a register.
+
+
+    //Gouraud 要修改 vertexShader，其他顏色是內插頂點
+
+    //Flat shading
+    https://stackoverflow.com/questions/40101023/flat-shading-in-webgl
+-->
+<script id="vertexShader" type="vertex">
+    #extension GL_EXT_shader_texture_lod : enable
+    #extension GL_OES_standard_derivatives : enable
+
+    attribute vec3 aVertexPosition; //紀錄 vertex 位置 
+    attribute vec3 aFrontColor; //模型顏色
+    attribute vec3 aVertexNormal;
+
+    uniform mat4 uMVMatrix; //uModelViewMatrix: 原地選轉、平移、放大縮小 
+    uniform mat4 uPMatrix; //uProjectionMatrix (投影方法): 透視圖等 (遠的小，近的大) 
+    
+    varying vec3 vFrontColor;
+    varying vec3 vNormalInterpolate;
+	varying vec3 vVertexPosition;
+
+    void main(void) {
+        vFrontColor = aFrontColor;
+
+        //因為傳進來的 vertex 會是自己的坐標系，需要知道他在世界坐標系下面物體的位置
+        //加上移動到 varying 裡面 (mvVertex)
+        vVertexPosition = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+
+        // 整個就是 CTM (Current Transformation Matrix) = ModelView + Projection
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0); 
+    }
+</script>
+
+
+<script id="vertexShaderGouraud" type="vertex">
+    attribute vec3 aVertexPosition; //紀錄 vertex 位置 
+    attribute vec3 aFrontColor; //color 算完用 varying 的 fragcolor 傳遞給 fragment
+
+    attribute vec3 aVertexNormal;
+
+    uniform mat4 uMVMatrix; //uModelViewMatrix: 原地選轉、平移、放大縮小 
+    uniform mat4 uPMatrix; //uProjectionMatrix (投影方法): 透視圖等 (遠的小，近的大) 
+
+    varying vec4 fragcolor;
+    varying vec3 vNormalInterpolate; //mvNormal
+
+    uniform float ka; //ambient 
+    uniform float kd; //diffuse 
+    uniform float ks; //specular 
+    uniform float shininess;
+    uniform vec3 lightPosition1;
+    uniform vec3 lightPosition2;
+    uniform vec3 lightPosition3;
+    uniform vec3 lightColor;
+
+    void main(void) {
+        //假設 lighting 位置
+        vec3 light = lightPosition1;
+
+        //實作 Gouraud shading (ambient + diffuse + specular)
+        vec3 gouraud = vec3(0, 0, 0); //= vec3(0.0);
+
+        //因為傳進來的 vertex 會是自己的坐標系，需要知道他在世界坐標系下面物體的位置
+        vec3 mvVertex = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        //normal 只表示垂直的 surface 位置(方向)，不該被 translate 影響，所以只要左上角 3x3 
+        mat3 normalMatrix = mat3(uMVMatrix); //4x4 => 3x3 自動抓左上角
+        vNormalInterpolate = normalMatrix * aVertexNormal;
+        
+        //需要 V, N, L, H
+        vec3 V = -normalize(mvVertex); // -(camera 看向物體) => 物體看向 camera
+        vec3 N = normalize(vNormalInterpolate); //就是 normal 的方向 => 但正規化
+        vec3 L = normalize(light - mvVertex);
+        vec3 H = normalize(L + V); //用在 specular light 裡面的 cos(alpha)^n，所謂的 halftway vector 的加速
+
+        //gouraud = ambient + diffuse + specular
+
+        vec3 ambient = lightColor * ka * aFrontColor; //不會重複計算，不管有幾個 light 都會是定值 (第一項其實是整個的 light intensity)
+        gouraud += ambient;
+
+        float cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        vec3 diffuse = lightColor * kd * aFrontColor * cosTheta;
+        gouraud += diffuse;
+
+        float cosAlpha = max(dot(H, N), 0.0);
+        vec3 specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        gouraud += specular;
+
+        // Second light, Light 重新定位
+        L = normalize(lightPosition2 - mvVertex);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * aFrontColor * cosTheta;
+        gouraud += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        gouraud += specular;
+
+        // Third light, Light 重新定位
+        L = normalize(lightPosition3 - mvVertex);
+        H = normalize(L + V);
+        cosTheta = max(dot(L, N), 0.0); // 長 長 cos，但長度都是 1。小心 dot 出來有負數，避免負數與 0 取 max
+        diffuse = lightColor * kd * aFrontColor * cosTheta;
+        gouraud += diffuse;
+
+        cosAlpha = max(dot(H, N), 0.0);
+        specular = lightColor * ks * pow(cosAlpha, shininess);
+        if(dot(L, N) < 0.0){ //如果 diffuse = 0 則 specular 也應該要 0
+            specular = vec3(0.0);
+        }
+        gouraud += specular;
+
+
+        
+        fragcolor = vec4(gouraud, 1.0);
+
+        // 整個就是 CTM (Current Transformation Matrix) = ModelView + Projection
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0); 
+    }
+</script>
+
+<script id="vertexShaderPhong" type="vertex">
+    attribute vec3 aVertexPosition; //紀錄 vertex 位置 
+    attribute vec3 aFrontColor; //模型顏色
+    attribute vec3 aVertexNormal;
+
+    uniform mat4 uMVMatrix; //uModelViewMatrix: 原地選轉、平移、放大縮小 
+    uniform mat4 uPMatrix; //uProjectionMatrix (投影方法): 透視圖等 (遠的小，近的大) 
+    
+    varying vec3 vFrontColor;
+    varying vec3 vNormalInterpolate;
+	varying vec3 vVertexPosition;
+
+    void main(void) {
+        vFrontColor = aFrontColor;
+
+        //因為傳進來的 vertex 會是自己的坐標系，需要知道他在世界坐標系下面物體的位置
+        //加上移動到 varying 裡面 (mvVertex)
+        vVertexPosition = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+
+        //normal 只表示垂直的 surface 位置(方向)，不該被 translate 影響，所以只要左上角 3x3 
+        //本來是 mvNormal => 放到 varying
+        mat3 normalMatrix = mat3(uMVMatrix); //4x4 => 3x3 自動抓左上角
+        vNormalInterpolate = normalMatrix * aVertexNormal;
+
+        // 整個就是 CTM (Current Transformation Matrix) = ModelView + Projection
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0); 
+    }
+</script>
+
+<script id="vertexShaderToon" type="vertex">
+    //https://stackoverflow.com/questions/5795829/using-opengl-toon-shader-in-glsl
+
+    attribute vec3 aVertexPosition; //紀錄 vertex 位置 
+    attribute vec3 aFrontColor; //模型顏色
+    attribute vec3 aVertexNormal; //模型的 normal
+
+    uniform mat4 uMVMatrix; //uModelViewMatrix: 原地選轉、平移、放大縮小 
+    uniform mat4 uPMatrix; //uProjectionMatrix (投影方法): 透視圖等 (遠的小，近的大) 
+    
+    //藉由 varying 傳遞到 fragmentShader 的資訊
+    varying vec3 vFrontColor;
+    varying vec3 vVertexNormal;
+	varying vec3 vVertexPosition;
+
+
+    void main(void) {
+        vFrontColor = aFrontColor;
+
+        //因為傳進來的 vertex 會是自己的坐標系，需要知道他在世界坐標系下面物體的位置
+        //加上移動到 varying 裡面 (mvVertex)
+        vVertexPosition = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+
+        //normal 只表示垂直的 surface 位置(方向)，不該被 translate 影響，所以只要左上角 3x3 
+        //本來是 mvNormal => 放到 varying
+        mat3 normalMatrix = mat3(uMVMatrix); //4x4 => 3x3 自動抓左上角
+        vVertexNormal = normalMatrix * aVertexNormal;
+
+        // 整個就是 CTM (Current Transformation Matrix) = ModelView + Projection
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0); 
+    }
+</script>
+
+<script type="text/javascript">
+    // common variables
+    var gl;
+    var shaderProgram1;
+    var shaderProgram2;
+    var shaderProgram3;
+
+    var mvMatrix = mat4.create();
+    var pMatrix  = mat4.create();
+
+    var teapotVertexPositionBuffer;
+    var teapotVertexNormalBuffer;
+    var teapotVertexFrontColorBuffer;
+
+    var vertexPositionBuffer1;
+    var vertexNormalBuffer1;
+    var vertexFrontColorBuffer1;
+
+    var vertexPositionBuffer2;
+    var vertexNormalBuffer2;
+    var vertexFrontColorBuffer2;
+
+    var vertexPositionBuffer3;
+    var vertexNormalBuffer3;
+    var vertexFrontColorBuffer3;
+
+    var teapotAngle = 180; //角度
+    var lastTime    = 0;
+
+    function initGL(canvas) {
+        // 確保 WebGL 有效才繼續執行 (瀏覽器有支援)
+        try {
+            // 初始化 GL context
+            gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            gl.viewportWidth  = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } 
+        catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+    //著色器
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id); //得到整個 script object
+        if (!shaderScript) {
+            return null;
+        }
+
+        gl.getExtension('OES_standard_derivatives');
+        gl.getExtension('EXT_shader_texture_lod');
+
+        var shaderSource = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                shaderSource += k.textContent; //就 text
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "fragment") { //header 的 type
+            shader = gl.createShader(gl.FRAGMENT_SHADER);//依據不同 type create shader
+        } 
+        else if (shaderScript.type == "vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } 
+        else {
+            return null;
+        }
+        
+        // https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/shaderSource
+        gl.shaderSource(shader, shaderSource); //將 source send 到 shader object
+        gl.compileShader(shader); //compile shader program
+
+        // check if it compiled successfully
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    function createProgram(gl, index){
+        var vertexShader, fragmentShader;
+        var type;
+        type = document.getElementById("shadeSelect" + index.toString()).value;
+        console.log(type);
+        if(type == "Flat"){
+            vertexShader   = getShader(gl, "vertexShader"); 
+            fragmentShader = getShader(gl, "fragmentShader"); 
+        }else if(type == "Gouraud"){
+            vertexShader   = getShader(gl, "vertexShaderGouraud");
+            fragmentShader = getShader(gl, "fragmentShaderGouraud"); 
+        }else if(type == "toon"){
+            vertexShader   = getShader(gl, "vertexShaderToon");
+            fragmentShader = getShader(gl, "fragmentShaderToon"); 
+        }else{ //Phong
+            vertexShader   = getShader(gl, "vertexShaderPhong"); //頂點著色器
+            fragmentShader = getShader(gl, "fragmentShaderPhong"); //片段著色器 (像素著色)
+        }
+        
+        
+        // 建立 shader 程式
+        var shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        //這邊超級重要，不然 vertex 或 fragment 寫錯根本得不到 error 資訊 !
+        var linked = gl.getProgramParameter(shaderProgram, gl.LINK_STATUS);
+        if (!linked) {
+            console.error(gl.getProgramInfoLog(shaderProgram));
+            alert("Could not initialise shaders");
+        }
+
+
+        return shaderProgram;
+    }
+
+    function useTargetProgram(shaderProgram){
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition"); //傳遞值給最上面宣告的 id
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+        shaderProgram.vertexFrontColorAttribute = gl.getAttribLocation(shaderProgram, "aFrontColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexFrontColorAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.pMatrixUniform  = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+
+        /*
+        // 如何 passing value to WebGL
+        https://stackoverflow.com/questions/26092600/sending-javascript-variables-to-fragment-shader
+        var x = document.getElementById("mySelect1").value;
+        var x = document.getElementsByName("rotate1");*/
+        //傳遞 ka, kd, ks, brightness
+        var tempLocation = gl.getUniformLocation(shaderProgram, "ka");
+        var tempValue = parseFloat(document.getElementById("ambient").value);
+        gl.uniform1f(tempLocation, tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "kd");
+        tempValue = parseFloat(document.getElementById("diffuse").value);
+        gl.uniform1f(tempLocation, tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "ks");
+        tempValue = parseFloat(document.getElementById("specular").value);
+        gl.uniform1f(tempLocation, tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "shininess");
+        tempValue = parseFloat(document.getElementById("shininess").value);
+        gl.uniform1f(tempLocation, tempValue);
+
+        //傳遞光源位置 [x, y, z] * 3
+        var tempX, tempY, tempZ;
+        for(var i = 1; i <= 3; i++){
+            tempLocation = gl.getUniformLocation(shaderProgram, "lightPosition" + i.toString());
+            tempX = parseFloat(document.getElementById("light" + i.toString() + "X").value);
+            tempY = parseFloat(document.getElementById("light" + i.toString() + "Y").value);
+            tempZ = parseFloat(document.getElementById("light" + i.toString() + "Z").value);
+            gl.uniform3fv(tempLocation, [tempX, tempY, tempZ]);
+        }
+        //光顏色
+        var tempR, tempG, tempB;
+        tempLocation = gl.getUniformLocation(shaderProgram, "lightColor");
+        tempR = parseFloat(document.getElementById("lightColorR").value);
+        tempG = parseFloat(document.getElementById("lightColorG").value);
+        tempB = parseFloat(document.getElementById("lightColorB").value);
+        gl.uniform3fv(tempLocation, [tempR, tempG, tempB]);
+    }
+
+    function initShaders() {
+
+        shaderProgram1 = createProgram(gl, 1);
+        shaderProgram2 = createProgram(gl, 2);
+        shaderProgram3 = createProgram(gl, 3);
+
+        /*
+        // 初始畫著色器 (Shader)
+        // https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Adding_2D_content_to_a_WebGL_context
+        // 使用 OpenGL 的 shading language
+        // call getShader function (自定義的)
+        //var vertexShader   = getShader(gl, "vertexShaderGouraud"); //頂點著色器
+        //var fragmentShader = getShader(gl, "fragmentShader"); //片段著色器 (像素著色)
+        //var vertexShader   = getShader(gl, "vertexShaderPhong"); //頂點著色器
+        //var fragmentShader = getShader(gl, "fragmentShaderPhong"); //片段著色器 (像素著色)
+        var vertexShader, fragmentShader;
+        var type;
+        type = document.getElementById("shadeSelect1").value;
+        console.log(type);
+        if(type == "Flat"){
+            vertexShader   = getShader(gl, "vertexShader"); 
+            fragmentShader = getShader(gl, "fragmentShader"); 
+        }else if(type == "Gouraud"){
+            vertexShader   = getShader(gl, "vertexShaderGouraud");
+            fragmentShader = getShader(gl, "fragmentShaderGouraud"); 
+        }else if(type == "toon"){
+            vertexShader   = getShader(gl, "vertexShaderToon");
+            fragmentShader = getShader(gl, "fragmentShaderToon"); 
+        }else{ //Phong
+            vertexShader   = getShader(gl, "vertexShaderPhong"); //頂點著色器
+            fragmentShader = getShader(gl, "fragmentShaderPhong"); //片段著色器 (像素著色)
+        }
+        
+        
+        // 建立 shader 程式
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        //這邊超級重要，不然 vertex 或 fragment 寫錯根本得不到 error 資訊 !
+        var linked = gl.getProgramParameter(shaderProgram, gl.LINK_STATUS);
+        if (!linked) {
+            console.error(gl.getProgramInfoLog(shaderProgram));
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition"); //傳遞值給最上面宣告的 id
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+        shaderProgram.vertexFrontColorAttribute = gl.getAttribLocation(shaderProgram, "aFrontColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexFrontColorAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.pMatrixUniform  = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+
+        
+        // 如何 passing value to WebGL
+        //https://stackoverflow.com/questions/26092600/sending-javascript-variables-to-fragment-shader
+        //var x = document.getElementById("mySelect1").value;
+        //console.log(x);
+        //var x = document.getElementsByName("rotate1");
+        //傳遞 ka, kd, ks, brightness
+        var tempLocation = gl.getUniformLocation(shaderProgram, "ka");
+        var tempValue = parseFloat(document.getElementById("ambient").value);
+        console.log(tempValue);
+        gl.uniform1f(tempLocation, tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "kd");
+        tempValue = parseFloat(document.getElementById("diffuse").value);
+        gl.uniform1f(tempLocation, tempValue);
+        console.log(tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "ks");
+        tempValue = parseFloat(document.getElementById("specular").value);
+        gl.uniform1f(tempLocation, tempValue);
+        console.log(tempValue);
+
+        tempLocation = gl.getUniformLocation(shaderProgram, "shininess");
+        tempValue = parseFloat(document.getElementById("shininess").value);
+        gl.uniform1f(tempLocation, tempValue);
+        console.log(tempValue);
+
+        //傳遞光源位置 [x, y, z] * 3
+        var tempX, tempY, tempZ;
+        for(var i = 1; i <= 3; i++){
+            tempLocation = gl.getUniformLocation(shaderProgram, "lightPosition" + i.toString());
+            tempX = parseFloat(document.getElementById("light" + i.toString() + "X").value);
+            tempY = parseFloat(document.getElementById("light" + i.toString() + "Y").value);
+            tempZ = parseFloat(document.getElementById("light" + i.toString() + "Z").value);
+            console.log([tempX, tempY, tempZ]);
+            gl.uniform3fv(tempLocation, [tempX, tempY, tempZ]);
+        }
+        //光顏色
+        var tempR, tempG, tempB;
+        tempLocation = gl.getUniformLocation(shaderProgram, "lightColor");
+        tempR = parseFloat(document.getElementById("lightColorR").value);
+        tempG = parseFloat(document.getElementById("lightColorG").value);
+        tempB = parseFloat(document.getElementById("lightColorB").value);
+        console.log([tempR, tempG, tempB]);
+        gl.uniform3fv(tempLocation, [tempR, tempG, tempB]);
+        */
+    }
+
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    //https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Adding_2D_content_to_a_WebGL_context
+    //https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Using_shaders_to_apply_color_in_WebGL
+    function handleLoadedData(objectData, index) { //畫出顏色
+        var i = index;
+        //console.log("in loading data");
+        //console.log(i);
+        //console.log((i+1).toString());
+
+        window["vertexPositionBuffer" + (i+1).toString()] = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, window["vertexPositionBuffer" + (i+1).toString()]);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexPositions), gl.STATIC_DRAW);
+        window["vertexPositionBuffer" + (i+1).toString()].itemSize = 3;
+        window["vertexPositionBuffer" + (i+1).toString()].numItems = objectData.vertexPositions.length / 3;
+
+        //console.log(window["vertexPositionBuffer" + (i+1).toString()]);
+        //console.log("vertexPositionBuffer" + (i+1).toString());
+
+        //vertexNormalBuffer[index]
+        window["vertexNormalBuffer" + (i+1).toString()] = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, window["vertexNormalBuffer" + (i+1).toString()]);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexNormals), gl.STATIC_DRAW);
+        window["vertexNormalBuffer" + (i+1).toString()].itemSize = 3;
+        window["vertexNormalBuffer" + (i+1).toString()].numItems = objectData.vertexNormals.length / 3;
+
+        //內插 color
+        //vertexFrontColorBuffer[index] 
+        window["vertexFrontColorBuffer" + (i+1).toString()] = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, window["vertexFrontColorBuffer" + (i+1).toString()]); //綁定 buffer
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexFrontcolors), gl.STATIC_DRAW); //給予每個 vertex 的 color(teapotData.vertexFrontcolors)
+        window["vertexFrontColorBuffer" + (i+1).toString()].itemSize = 3;
+        window["vertexFrontColorBuffer" + (i+1).toString()].numItems = objectData.vertexFrontcolors.length / 3;
+    }
+
+    function loadObject() { //load object data
+        //被非同步搞到囉，本來想 pass index，但等待完成後 i 都 = 3
+        var request = new XMLHttpRequest(); //retrieve data from a URL without having to do a full page refresh
+        var tempName = document.getElementById("mySelect1").value;
+        request.open("GET", "./model/" + tempName + ".json"); 
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedData(JSON.parse(request.responseText), 0);
+            }
+        }
+        request.send();
+    }
+    function loadObject2() { //load object data
+        //被非同步搞到囉，本來想 pass index，但等待完成後 i 都 = 3
+        var request = new XMLHttpRequest(); //retrieve data from a URL without having to do a full page refresh
+        var tempName = document.getElementById("mySelect2").value;
+        request.open("GET", "./model/" + tempName + ".json"); 
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedData(JSON.parse(request.responseText), 1);
+            }
+        }
+        request.send();
+    }
+    function loadObject3() { //load object data
+        //被非同步搞到囉，本來想 pass index，但等待完成後 i 都 = 3
+        var request = new XMLHttpRequest(); //retrieve data from a URL without having to do a full page refresh
+        var tempName = document.getElementById("mySelect3").value;
+        request.open("GET", "./model/" + tempName + ".json"); 
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedData(JSON.parse(request.responseText), 2);
+            }
+        }
+        request.send();
+    }
+
+
+    /*
+        TODO HERE:
+        add two or more objects showing on the canvas
+        (it needs at least three objects showing at the same time)
+    */
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        var programs = [ shaderProgram1, shaderProgram2, shaderProgram3];
+
+        for(var i = 0; i < 3; i++){
+            //console.log("vertexPositionBuffer" + (i+1).toString());
+            if (window["vertexPositionBuffer" + (i+1).toString()]   == null || 
+                window["vertexNormalBuffer" + (i+1).toString()]     == null || 
+                window["vertexFrontColorBuffer" + (i+1).toString()] == null) {
+                
+                console.log("One of the object is empty");
+                return;
+            }
+            var shaderProgram = programs[i];
+            useTargetProgram(shaderProgram); //set attribute, uniform
+
+            //http://glmatrix.net/docs/mat4.js.html
+
+            // Setup Projection Matrix
+            mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix); //(FOV 45度)
+
+            // Setup Model-View Matrix
+            mat4.identity(mvMatrix);
+            var tempX, tempY, tempZ;
+            tempX = parseFloat(document.getElementById("translate" + (i+1).toString() + "X").value);
+            tempY = parseFloat(document.getElementById("translate" + (i+1).toString() + "Y").value);
+            tempZ = parseFloat(document.getElementById("translate" + (i+1).toString() + "Z").value);
+            mat4.translate(mvMatrix, [tempX, tempY, tempZ]); // gl 預設位置 (0, 0, 0) 看向 -1
+            var rotateTarget = document.getElementsByName("rotate" + (i+1).toString());
+            var rotateVector = [0, 0, 0];
+            for (var j = 0, l; j < 3; j++) {
+                if (rotateTarget[j].checked) {
+                    rotateVector[j] = 1;
+                    break;
+                }
+            }
+
+            var shearTarget = document.getElementById("shear" + (i+1).toString()).checked;    
+            if(shearTarget == true){
+                var shearMatrix = mat4.create();
+                mat4.identity(shearMatrix);
+                shearMatrix[4] = 0.5;
+                mat4.multiply(mvMatrix, shearMatrix);
+            }
+
+            mat4.rotate(mvMatrix, degToRad(teapotAngle), rotateVector); //(destination matrix, matrix to rotate, rotate in radians, axis)
+            // [identity][translate][rotate] [target]
+            //順序從右到左，所以這邊也是先旋轉 => 平移
+            //順序有差!
+            var scaleSize = parseFloat(document.getElementById("scale" + (i+1).toString()).value);
+            mat4.scale(mvMatrix, [scaleSize, scaleSize, scaleSize]);
+
+            //只有 shear 需要實作
+
+            gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+            gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+
+            // Setup teapot position data
+            gl.bindBuffer(gl.ARRAY_BUFFER, window["vertexPositionBuffer" + (i+1).toString()]);
+            gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, 
+            window["vertexPositionBuffer" + (i+1).toString()].itemSize, 
+                                gl.FLOAT, 
+                                false, 
+                                0, 
+                                0);
+
+            // Setup teapot front color data
+            gl.bindBuffer(gl.ARRAY_BUFFER,  window["vertexFrontColorBuffer" + (i+1).toString()]);
+            gl.vertexAttribPointer(shaderProgram.vertexFrontColorAttribute, 
+            window["vertexFrontColorBuffer" + (i+1).toString()].itemSize, 
+                                gl.FLOAT, 
+                                false, 
+                                0, 
+                                0);
+
+            // Setup teapot vertex normal data
+            gl.bindBuffer(gl.ARRAY_BUFFER, window["vertexNormalBuffer" + (i+1).toString()]);
+            gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, 
+            window["vertexNormalBuffer" + (i+1).toString()].itemSize, 
+                                gl.FLOAT, 
+                                false, 
+                                0, 
+                                0);
+
+            gl.drawArrays(gl.TRIANGLES, 0, window["vertexPositionBuffer" + (i+1).toString()].numItems); //(畫三角形, 從 0, 畫到 numItems)
+
+        }
+    }
+
+
+    function animate() { //這邊藉由增加角度來旋轉
+        var timeNow = new Date().getTime();
+        if (lastTime != 0) {
+            var elapsed = timeNow - lastTime;
+            teapotAngle += 0.03 * elapsed;
+        }
+        
+        lastTime = timeNow;
+    }
+
+    function tick() {
+        //https://developer.mozilla.org/en-US/docs/Web/API/window/requestAnimationFrame
+        // tells the browser that you wish to perform an animation 
+        // and requests that the browser calls a specified function 
+        // to update an animation before the next repaint
+        requestAnimFrame(tick); //want to animate another frame at the next repaint.
+        drawScene();
+        animate();
+    }
+
+    function webGLStart() {
+        var canvas = document.getElementById("ICG-canvas");
+        initGL(canvas);
+        initShaders();
+        loadObject();
+        loadObject2();
+        loadObject3();
+        
+        // 設定清除色彩
+        gl.clearColor(0.0, 0.2, 0.2, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        // 透過清除色來清除色彩緩衝區
+        //gl.clear(gl.COLOR_BUFFER_BIT);
+
+        tick(); //Draw
+    }
+</script>
+</head>
+
+<body onload="webGLStart();">
+    <!-- 
+        https://developer.mozilla.org/zh-TW/docs/Web/API/WebGL_API/Tutorial/Getting_started_with_WebGL
+        首先需要一個 Canvas (畫布)
+
+        selected="selected": 讓 select tag default
+     -->
+    <canvas id="ICG-canvas" style="border: none;" width="1280" height="720"></canvas>
+    <br/>
+    <p>Select object.</p>
+    <select id="mySelect1" onchange="webGLStart()">
+        <option value="Car_road">Car_road</option>
+        <option value="Church_s">Church_s</option>
+        <option value="Csie">Csie</option>
+        <option value="Easter">Easter</option>
+        <option value="Fighter">Fighter</option>
+        <option value="Kangaroo">Kangaroo</option>
+        <option value="Longteap">Longteap</option>
+        <option value="Mercedes">Mercedes</option>
+        <option value="Mig27">Mig27</option>
+        <option value="Patchair">Patchair</option>
+        <option value="Plant">Plant</option>
+        <option value="Teapot" selected="selected">Teapot</option>
+        <option value="Tomcat">Tomcat</option>
+    </select>
+    <select id="mySelect2" onchange="webGLStart()">
+        <option value="Car_road">Car_road</option>
+        <option value="Church_s">Church_s</option>
+        <option value="Csie">Csie</option>
+        <option value="Easter">Easter</option>
+        <option value="Fighter">Fighter</option>
+        <option value="Kangaroo">Kangaroo</option>
+        <option value="Longteap">Longteap</option>
+        <option value="Mercedes">Mercedes</option>
+        <option value="Mig27">Mig27</option>
+        <option value="Patchair">Patchair</option>
+        <option value="Plant">Plant</option>
+        <option value="Teapot" selected="selected">Teapot</option>
+        <option value="Tomcat">Tomcat</option>
+    </select>
+    <select id="mySelect3" onchange="webGLStart()">
+        <option value="Car_road">Car_road</option>
+        <option value="Church_s">Church_s</option>
+        <option value="Csie">Csie</option>
+        <option value="Easter">Easter</option>
+        <option value="Fighter">Fighter</option>
+        <option value="Kangaroo">Kangaroo</option>
+        <option value="Longteap">Longteap</option>
+        <option value="Mercedes">Mercedes</option>
+        <option value="Mig27">Mig27</option>
+        <option value="Patchair">Patchair</option>
+        <option value="Plant">Plant</option>
+        <option value="Teapot" selected="selected">Teapot</option>
+        <option value="Tomcat">Tomcat</option>
+    </select>
+    <p>Select shading.</p>
+    <select id="shadeSelect1" onchange="webGLStart()">
+        <option value="Flat" selected="selected">Flat</option>
+        <option value="Gouraud">Gouraud</option>
+        <option value="Phong">Phong</option>
+        <option value="toon">toon</option>
+    </select>
+    <select id="shadeSelect2" onchange="webGLStart()">
+        <option value="Flat">Flat</option>
+        <option value="Gouraud" selected="selected">Gouraud</option>
+        <option value="Phong">Phong</option>
+        <option value="toon">toon</option>
+    </select>
+    <select id="shadeSelect3" onchange="webGLStart()">
+        <option value="Flat">Flat</option>
+        <option value="Gouraud">Gouraud</option>
+        <option value="Phong" selected="selected">Phong</option>
+        <option value="toon">toon</option>
+    </select>
+    <br><br>
+
+
+    <!--
+        ambient + diffuse + specular, brightness
+    -->
+    <div>
+        ambient:<input type="text" id="ambient" value="0.1">
+        <br><br>
+        diffuse: <input type="text" id="diffuse" value="0.6">
+        <br><br>
+        specular:<input type="text" id="specular" value="0.3">
+        <br><br>
+        <label for="shininess">shininess:</label>
+        <input type="number" id="shininess" name="shininess" min="0" step="1" value="80">
+        <button onclick="webGLStart()">Submit</button>
+        <br><br>
+    </div>
+
+
+    <!--
+        translate, rotate, scale, shear
+    -->
+    <div>
+        <label for="translate">transformation:</label>
+        <br>
+        1: 
+        X: <input type="text" id="translate1X" value="-30">
+        Y: <input type="text" id="translate1Y" value="0">
+        Z: <input type="text" id="translate1Z" value="-60">
+        <br>
+        2: 
+        X: <input type="text" id="translate2X" value="0">
+        Y: <input type="text" id="translate2Y" value="0">
+        Z: <input type="text" id="translate2Z" value="-60">
+        <br>
+        3: 
+        X: <input type="text" id="translate3X" value="30">
+        Y: <input type="text" id="translate3Y" value="0">
+        Z: <input type="text" id="translate3Z" value="-60">
+        <br><br>
+    </div>
+    <div>
+        <label for="rotate">rotation:</label>
+        <br>
+        1: 
+        X: <input type="radio" id="rotate1X" name="rotate1" checked="checked">
+        Y: <input type="radio" id="rotate1Y" name="rotate1">
+        Z: <input type="radio" id="rotate1Z" name="rotate1">
+        <br>
+        2: 
+        X: <input type="radio" id="rotate2X" name="rotate2">
+        Y: <input type="radio" id="rotate2Y" name="rotate2" checked="checked">
+        Z: <input type="radio" id="rotate2Z" name="rotate2">
+        <br>
+        3: 
+        X: <input type="radio" id="rotate3X" name="rotate3">
+        Y: <input type="radio" id="rotate3Y" name="rotate3">
+        Z: <input type="radio" id="rotate3Z" name="rotate3" checked="checked">
+        <br><br>
+    </div>
+    <div>
+        <label for="scale">scale:</label>
+        <br>
+        1: <input type="text" id="scale1" value="1.0">
+        2: <input type="text" id="scale2" value="1.0">
+        3: <input type="text" id="scale3" value="1.0">
+        <br><br>
+    </div>
+    <div>
+        <label for="shear">shear:</label>
+        <br>
+        1: 
+        <input type="checkbox" id="shear1">
+        2: 
+        <input type="checkbox" id="shear2" checked="checked">
+        3: 
+        <input type="checkbox" id="shear3">
+        <br><br>
+    </div>
+
+
+
+    <!--
+        Light: upper left, lower right, back
+    -->
+    <div>
+        <div>
+            <label for="LightColor"><b>Light color:</b></label>
+            R: <input type="number" id="lightColorR" min="0.0" max="1.0" value="1.0">
+            G: <input type="number" id="lightColorG" min="0.0" max="1.0" value="1.0">
+            B: <input type="number" id="lightColorB" min="0.0" max="1.0" value="1.0"> (0.0~1.0)
+        </div>
+        <div>
+            <label for="light1"><b>Light1:</b></label>
+            X: <input type="text" id="light1X" value="-50">
+            Y: <input type="text" id="light1Y" value="50">
+            Z: <input type="text" id="light1Z" value="-25">
+        </div>
+        <div>
+            <label for="light2"><b>Light2:</b></label>
+            X: <input type="text" id="light2X" value="50">
+            Y: <input type="text" id="light2Y" value="-50">
+            Z: <input type="text" id="light2Z" value="-25">
+        </div>
+        <div>
+            <label for="light3"><b>Light3:</b></label>
+            X: <input type="text" id="light3X" value="0">
+            Y: <input type="text" id="light3Y" value="0">
+            Z: <input type="text" id="light3Z" value="-100">
+        </div>
+        <button onclick="webGLStart()">Submit</button>
+    </div>
+    
+    
+</body>
+
+</html>
